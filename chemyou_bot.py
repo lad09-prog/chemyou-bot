@@ -50,7 +50,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def analyze_blood(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+    text = update.message.text.lower()
+    if "guide" in text:
+        await guide_command(update, context)
+        return
     results = parse_blood_test(text)
     if not results:
         await update.message.reply_text(
