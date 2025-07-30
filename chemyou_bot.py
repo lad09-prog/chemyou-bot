@@ -7,8 +7,8 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 # ⬇️ Замените на свой токен
-TELEGRAM_BOT_TOKEN = "K85732521188957"
-OCR_API_KEY = "helloworld"  # Тестовый ключ от OCR.space
+TELEGRAM_BOT_TOKEN = "8440029324:AAEcZt7-GOcCzOles_tkXzncgJcul8OXhLY"
+OCR_API_KEY = "K85732521188957"  # Тестовый ключ от OCR.space
 
 logging.basicConfig(level=logging.INFO)
 
