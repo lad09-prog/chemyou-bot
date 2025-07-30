@@ -1,107 +1,69 @@
 import logging
-import pytesseract
+import re
+import requests
+from io import BytesIO
 from PIL import Image
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Enable logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# ⬇️ Замените на свой токен
+TELEGRAM_BOT_TOKEN = "K85732521188957"
+OCR_API_KEY = "helloworld"  # Тестовый ключ от OCR.space
 
-# Your Bot Token (replace with your actual token before running)
-BOT_TOKEN = "8440029324:AAEcZt7-GOcCzOles_tkXzncgJcul8OXhLY"
+logging.basicConfig(level=logging.INFO)
 
-# Expanded test keywords for better recognition
-TEST_KEYWORDS = {
-    "Hemoglobin": "HGB",
-    "Iron": "Fe",
-    "Vitamin D": "Vit D",
-    "Glucose": "Glucose",
-    "WBC": "WBC",
-    "RBC": "RBC",
-    "HCT": "HCT",
-    "MCV": "MCV",
-    "MCH": "MCH",
-    "MCHC": "MCHC",
-    "PLT": "PLT",
-    "NEUT": "NEUT",
-    "LYMPH": "LYMPH",
-    "MO": "MO",
-    "EO": "EO",
-    "BA": "BA",
-    "ESR": "ESR",
-    "Neutrophils": "NE",
-    "Lymphocytes": "LY",
-    "Monocytes": "MO",
-    "Eosinophils": "EO",
-    "Basophils": "BA",
-    "Sedimentation rate": "ESR",
-}
+# 📌 Регулярное выражение для извлечения показателей
+VALUE_REGEX = re.compile(r'([\w\s\-%\(\)/]+):\s*([0-9]+[.,]?[0-9]*)')
+
+def parse_blood_values(text):
+    matches = VALUE_REGEX.findall(text)
+    if not matches:
+        return None
+    return "\n".join([f"{k.strip()}: {v}" for k, v in matches])
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Welcome to ChemYou bot! ð¤\nPlease send a photo or write your blood test like:\nHemoglobin: 120\nIron: 9\nVitamin D: 18")
-
-def extract_values(text: str):
-    result = {}
-    lines = text.splitlines()
-    for line in lines:
-        for key in TEST_KEYWORDS.keys():
-            if key.lower() in line.lower():
-                parts = line.split(":")
-                if len(parts) >= 2:
-                    try:
-                        val = float(parts[1].split()[0])
-                        result[TEST_KEYWORDS[key]] = val
-                    except:
-                        continue
-    return result
-
-def get_recommendations(values):
-    recs = []
-    if "HGB" in values and values["HGB"] < 117:
-        recs.append("Your hemoglobin is low. Consider iron supplements and check ferritin.")
-    if "Iron" in values and values["Iron"] < 8:
-        recs.append("Iron appears to be low. Consider dietary sources like red meat or supplementation.")
-    if "Vit D" in values and values["Vit D"] < 30:
-        recs.append("Vitamin D is low. A D3 supplement may help.")
-    if "WBC" in values and values["WBC"] > 10:
-        recs.append("High white blood cells may indicate inflammation or infection.")
-    if not recs:
-        recs.append("Everything looks fine from the data provided. ð")
-    return "\n".join(recs)
-
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    photo = update.message.photo[-1]
-    photo_file = await photo.get_file()
-    photo_path = "temp_photo.jpg"
-    await photo_file.download_to_drive(photo_path)
-
-    try:
-        text = pytesseract.image_to_string(Image.open(photo_path), lang="eng+rus")
-        values = extract_values(text)
-        if values:
-            summary = "\n".join([f"{k}: {v}" for k, v in values.items()])
-            recs = get_recommendations(values)
-            await update.message.reply_text(f"Detected values:\n{summary}\n\nRecommendations:\n{recs}")
-        else:
-            await update.message.reply_text("Sorry, I couldn't read any known values. Please try a clearer image.")
-    except Exception as e:
-        await update.message.reply_text(f"Error processing image: {e}")
+    await update.message.reply_text("Hi! Send me your blood test results as text or a photo.")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
-    values = extract_values(user_text)
-    if values:
-        summary = "\n".join([f"{k}: {v}" for k, v in values.items()])
-        recs = get_recommendations(values)
-        await update.message.reply_text(f"Detected values:\n{summary}\n\nRecommendations:\n{recs}")
+    parsed = parse_blood_values(user_text)
+    if parsed:
+        await update.message.reply_text(f"✅ I found these results:\n\n{parsed}")
     else:
-        await update.message.reply_text("Sorry, I couldn't recognize your test results. Please send in format:\nHemoglobin: 120\nIron: 9\nVitamin D: 18")
+        await update.message.reply_text(
+            "❌ Sorry, I couldn't recognize your test results.\n\nPlease send them in this format:\nHemoglobin: 120\nIron: 9\nVitamin D: 18"
+        )
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    photo_file = await update.message.photo[-1].get_file()
+    photo_bytes = BytesIO()
+    await photo_file.download_to_memory(out=photo_bytes)
+    photo_bytes.seek(0)
+
+    try:
+        ocr_text = extract_text_with_ocr(photo_bytes)
+        parsed = parse_blood_values(ocr_text)
+        if parsed:
+            await update.message.reply_text(f"📸 Extracted results:\n\n{parsed}")
+        else:
+            await update.message.reply_text("❌ I couldn't extract values from the image.")
+    except Exception as e:
+        await update.message.reply_text(f"⚠️ Error processing image: {str(e)}")
+
+def extract_text_with_ocr(image_bytes):
+    response = requests.post(
+        'https://api.ocr.space/parse/image',
+        files={'file': ('image.jpg', image_bytes)},
+        data={'apikey': OCR_API_KEY, 'language': 'eng'},
+    )
+    result = response.json()
+    return result['ParsedResults'][0]['ParsedText'] if result['IsErroredOnProcessing'] is False else ""
 
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.run_polling()
 
 if __name__ == "__main__":
